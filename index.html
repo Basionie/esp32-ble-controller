@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ESP32 BLE Controller</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{--pad:16px}
+    body{font-family:system-ui,Segoe UI,Arial;margin:var(--pad);max-width:720px}
+    h1{margin:0 0 8px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:12px 0}
+    button{padding:12px;border-radius:12px;border:1px solid #ccc;cursor:pointer}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-top:12px}
+    .row{display:flex;gap:10px;align-items:center}
+    input[type=range]{width:100%}
+    pre{white-space:pre-wrap;background:#f7f7f7;border-radius:8px;padding:10px;min-height:100px}
+    .status{display:inline-block;padding:4px 10px;border:1px solid #ddd;border-radius:999px}
+  </style>
+</head>
+<body>
+  <h1>ESP32 BLE Controller</h1>
+  <div class="row">
+    <span class="status" id="status">Idle</span>
+    <span id="dev"></span>
+  </div>
+
+  <div class="grid">
+    <button id="btnConnect">Connect</button>
+    <button id="btnDisconnect" disabled>Disconnect</button>
+  </div>
+
+  <div class="grid">
+    <button id="btnOn"  disabled>LED ON</button>
+    <button id="btnOff" disabled>LED OFF</button>
+    <button id="btnPwm0" disabled>PWM 0</button>
+    <button id="btnPwm255" disabled>PWM 255</button>
+  </div>
+
+  <div class="card">
+    <b>PWM</b>
+    <div class="row" style="margin-top:8px">
+      <input type="range" id="pwm" min="0" max="255" value="0" disabled>
+      <span id="pwmVal">0</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Custom Command</b>
+    <div class="row" style="margin-top:8px">
+      <input id="custom" placeholder="e.g. SERVO 90" style="flex:1;padding:10px;border:1px solid #ccc;border-radius:10px">
+      <button id="send" disabled>Send</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Logs</b>
+    <pre id="log"></pre>
+  </div>
+
+<script>
+const svc = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const rx  = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+const tx  = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const nameFilter = 'ESP32-BLE-UART';
+
+let device, server, service, rxChar, txChar;
+
+const $ = sel => document.querySelector(sel);
+const log = (m)=> { $("#log").textContent = `${new Date().toLocaleTimeString()}  ${m}\n` + $("#log").textContent; }
+const setStatus = s => $("#status").textContent = s;
+
+function setEnabled(connected){
+  $("#btnDisconnect").disabled = !connected;
+  $("#btnOn").disabled = !connected;
+  $("#btnOff").disabled = !connected;
+  $("#btnPwm0").disabled = !connected;
+  $("#btnPwm255").disabled = !connected;
+  $("#pwm").disabled = !connected;
+  $("#send").disabled = !connected;
+}
+
+async function connect(){
+  try{
+    setStatus("Scanning...");
+device = await navigator.bluetooth.requestDevice({
+  acceptAllDevices: true,
+  optionalServices: [svc]
+});
+
+    device.addEventListener('gattserverdisconnected', onDisconnect);
+    $("#dev").textContent = device.name || nameFilter;
+
+    setStatus("Connecting...");
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(svc);
+    rxChar  = await service.getCharacteristic(rx);
+    txChar  = await service.getCharacteristic(tx);
+
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', e=>{
+      const v = new TextDecoder().decode(e.target.value);
+      log("ESP32 → " + v);
+    });
+
+    setEnabled(true);
+    setStatus("Ready");
+    log("Connected");
+  }catch(err){
+    log("ERR: " + err);
+    setStatus("Idle");
+  }
+}
+
+async function onDisconnect(){
+  setEnabled(false);
+  setStatus("Idle");
+  log("Disconnected");
+}
+
+async function disconnect(){
+  if(device?.gatt?.connected) device.gatt.disconnect();
+}
+
+async function send(text){
+  if(!rxChar) return;
+  await rxChar.writeValue(new TextEncoder().encode(text));
+  log("You → " + text);
+}
+
+$("#btnConnect").onclick = connect;
+$("#btnDisconnect").onclick = disconnect;
+$("#btnOn").onclick = ()=> send("LED ON");
+$("#btnOff").onclick = ()=> send("LED OFF");
+$("#btnPwm0").onclick = ()=> { $("#pwm").value = 0; $("#pwmVal").textContent = 0; send("PWM 0"); };
+$("#btnPwm255").onclick = ()=> { $("#pwm").value = 255; $("#pwmVal").textContent = 255; send("PWM 255"); };
+$("#pwm").oninput = ()=> $("#pwmVal").textContent = $("#pwm").value;
+$("#pwm").onchange = ()=> send("PWM " + $("#pwm").value);
+$("#send").onclick = ()=> {
+  const t = $("#custom").value.trim();
+  if(t) send(t);
+};
+</script>
+</body>
+</html>
